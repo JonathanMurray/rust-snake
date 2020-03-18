@@ -5,16 +5,16 @@ extern crate piston;
 extern crate rand;
 
 use glutin_window::GlutinWindow as Window;
-use graphics::Transformed;
 use graphics::types::Matrix2d;
+use graphics::Transformed;
 use opengl_graphics::{GlGraphics, OpenGL};
+use piston::event_loop::{EventSettings, Events};
+use piston::input::{RenderArgs, RenderEvent, UpdateArgs, UpdateEvent};
+use piston::window::WindowSettings;
 use piston::Button::Keyboard;
 use piston::ButtonEvent;
 use piston::ButtonState;
-use piston::event_loop::{Events, EventSettings};
-use piston::input::{RenderArgs, RenderEvent, UpdateArgs, UpdateEvent};
 use piston::Key;
-use piston::window::WindowSettings;
 use rand::Rng;
 
 const WINDOW_SIZE: [u32; 2] = [600, 600];
@@ -46,12 +46,21 @@ impl Game {
         Game {
             gl,
             playing: true,
-            snake_positions: vec![[0, 0]],
-            next_direction: [1, 0],
-            direction: [1, 0],
+            snake_positions: vec![],
+            next_direction: [0, 0],
+            direction: [0, 0],
             move_timer: 0.0,
-            food_position: [5, 0],
+            food_position: [0, 0],
         }
+    }
+
+    fn set_start_state(&mut self) {
+        self.playing = true;
+        self.snake_positions = vec![[0, GRID_SIZE[1] / 2]];
+        self.next_direction = [1, 0];
+        self.direction = self.next_direction;
+        self.move_timer = 0.0;
+        self.spawn_food();
     }
 
     fn render(&mut self, args: &RenderArgs) {
@@ -137,15 +146,19 @@ impl Game {
                 }
 
                 if *self.snake_positions.last().unwrap() == self.food_position {
-                    let mut rng = rand::thread_rng();
-                    let x = rng.gen_range(0, GRID_SIZE[0]);
-                    let y = rng.gen_range(0, GRID_SIZE[1]);
-                    self.food_position = [x, y];
+                    self.spawn_food();
                 } else {
                     self.snake_positions.remove(0);
                 }
             }
         }
+    }
+
+    fn spawn_food(&mut self) {
+        let mut rng = rand::thread_rng();
+        let x = rng.gen_range(0, GRID_SIZE[0]);
+        let y = rng.gen_range(0, GRID_SIZE[1]);
+        self.food_position = [x, y];
     }
 
     fn has_collided(&self) -> bool {
@@ -179,6 +192,12 @@ impl Game {
                     self.next_direction = [1, 0];
                 }
             }
+            Key::Return => {
+                if !self.playing {
+                    println!("RESTARTING");
+                    self.set_start_state();
+                }
+            }
             _ => {}
         }
     }
@@ -196,22 +215,23 @@ fn main() {
         .unwrap();
 
     // Create a new game and run it.
-    let mut app = Game::new(GlGraphics::new(opengl));
+    let mut game = Game::new(GlGraphics::new(opengl));
+    game.set_start_state();
 
     let mut events = Events::new(EventSettings::new());
     while let Some(e) = events.next(&mut window) {
         if let Some(args) = e.render_args() {
-            app.render(&args);
+            game.render(&args);
         }
 
         if let Some(args) = e.update_args() {
-            app.update(&args);
+            game.update(&args);
         }
 
         if let Some(args) = e.button_args() {
             if args.state == ButtonState::Press {
                 if let Keyboard(key) = args.button {
-                    app.handle_key_press(key);
+                    game.handle_key_press(key);
                 }
             }
         }
