@@ -71,13 +71,15 @@ impl Direction {
 pub struct EntityMovement {
     timer: f64,
     direction: Direction,
+    cooldown: f64,
 }
 
 impl EntityMovement {
-    fn new(direction: Direction) -> Self {
+    fn new(direction: Direction, cooldown: f64) -> Self {
         Self {
             timer: 0.0,
             direction,
+            cooldown,
         }
     }
 }
@@ -101,7 +103,7 @@ impl Entity {
     fn new_bullet(position: Position, direction: Direction) -> Self {
         Self {
             position,
-            movement: Some(EntityMovement::new(direction)),
+            movement: Some(EntityMovement::new(direction, BULLET_MOVEMENT_COOLDOWN)),
             color: COLOR_BULLET,
         }
     }
@@ -111,6 +113,17 @@ impl Entity {
             position,
             movement: None,
             color: COLOR_TRAP,
+        }
+    }
+
+    fn update(&mut self, elapsed_seconds: f64) {
+        if let Some(movement) = self.movement.as_mut() {
+            movement.timer -= elapsed_seconds;
+            if movement.timer < 0.0 {
+                movement.timer += movement.cooldown;
+                let [dx, dy] = movement.direction.as_tuple();
+                self.position = [self.position[0] + dx, self.position[1] + dy];
+            }
         }
     }
 }
@@ -260,17 +273,8 @@ impl Game {
                     self.snake_positions.remove(0);
                 }
             }
-            if let Some(mut bullet) = self.bullet.as_mut() {
-                let movement = bullet
-                    .movement
-                    .as_mut()
-                    .expect("Bullet must have movement!");
-                movement.timer -= args.dt;
-                if movement.timer < 0.0 {
-                    movement.timer += BULLET_MOVEMENT_COOLDOWN;
-                    let [dx, dy] = movement.direction.as_tuple();
-                    bullet.position = [bullet.position[0] + dx, bullet.position[1] + dy];
-                }
+            if let Some(bullet) = self.bullet.as_mut() {
+                bullet.update(args.dt);
 
                 if bullet.position == self.food.position {
                     self.food.position = Game::random_position();
