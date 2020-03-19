@@ -39,7 +39,7 @@ const PIXEL_OFFSET: [f64; 2] = [
 type Color = [f32; 4];
 type Position = [i32; 2];
 
-#[derive(PartialEq, Copy, Clone)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 enum Direction {
     Right,
     Left,
@@ -67,6 +67,64 @@ impl Direction {
     }
 }
 
+#[derive(Debug)]
+pub struct EntityMovement {
+    timer: f64,
+    direction: Direction,
+}
+
+impl EntityMovement {
+    fn new(direction: Direction) -> Self {
+        Self {
+            timer: 0.0,
+            direction,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Entity {
+    position: Position,
+    movement: Option<EntityMovement>,
+    color: Color,
+}
+
+impl Entity {
+    fn new_food(position: Position) -> Self {
+        Self {
+            position,
+            movement: None,
+            color: COLOR_FOOD,
+        }
+    }
+
+    fn new_bullet(position: Position, direction: Direction) -> Self {
+        Self {
+            position,
+            movement: Some(EntityMovement::new(direction)),
+            color: COLOR_BULLET,
+        }
+    }
+
+    fn new_trap(position: Position) -> Self {
+        Self {
+            position,
+            movement: None,
+            color: COLOR_TRAP,
+        }
+    }
+}
+
+impl Default for Entity {
+    fn default() -> Self {
+        Self {
+            position: [0, 0],
+            movement: None,
+            color: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+}
+
 pub struct Game {
     gl: GlGraphics,
     playing: bool,
@@ -74,11 +132,9 @@ pub struct Game {
     next_direction: Direction,
     direction: Direction,
     snake_move_timer: f64,
-    food_position: Position,
-    bullet_position: Option<Position>,
-    bullet_move_timer: f64,
-    bullet_direction: Direction,
-    trap_positions: Vec<Position>,
+    food: Entity,
+    bullet: Option<Entity>,
+    traps: Vec<Entity>,
     trap_spawn_timer: f64,
 }
 
@@ -91,11 +147,9 @@ impl Game {
             next_direction: Direction::Right,
             direction: Direction::Right,
             snake_move_timer: 0.0,
-            food_position: [0, 0],
-            bullet_position: None,
-            bullet_move_timer: 0.0,
-            bullet_direction: Direction::Right,
-            trap_positions: vec![],
+            food: Default::default(),
+            bullet: None,
+            traps: vec![],
             trap_spawn_timer: 0.0,
         }
     }
@@ -106,29 +160,27 @@ impl Game {
         self.next_direction = Direction::Right;
         self.direction = self.next_direction;
         self.snake_move_timer = 0.0;
-        self.food_position = Game::random_position();
-        self.bullet_position = None;
-        self.trap_positions = vec![];
+        self.food = Entity::new_food(Game::random_position());
+        self.bullet = None;
+        self.traps = vec![];
     }
 
     fn render(&mut self, args: &RenderArgs) {
         let snake_positions = &self.snake_positions;
         let playing = self.playing;
-        let food_position = &self.food_position;
-        let bullet_position = &self.bullet_position;
-        let trap_positions = &self.trap_positions;
+        let food = &self.food;
+        let bullet = &self.bullet.as_ref();
+        let traps = &self.traps;
 
         self.gl.draw(args.viewport(), |c, gl| {
             graphics::clear(COLOR_BG, gl);
             let transform = c.transform.trans(PIXEL_OFFSET[0], PIXEL_OFFSET[1]);
             Game::render_grid(transform, gl);
             Game::render_snake(snake_positions, playing, gl, transform);
-            Game::render_square(food_position, COLOR_FOOD, gl, transform);
-            if let Some(pos) = bullet_position {
-                Game::render_square(pos, COLOR_BULLET, gl, transform);
-            }
-            for trap_pos in trap_positions {
-                Game::render_square(trap_pos, COLOR_TRAP, gl, transform);
+            Game::render_entity(food, gl, transform);
+            bullet.map(|bullet| Game::render_entity(&bullet, gl, transform));
+            for trap in traps {
+                Game::render_entity(trap, gl, transform);
             }
         });
     }
@@ -177,13 +229,13 @@ impl Game {
         }
     }
 
-    fn render_square(position: &Position, color: Color, gl: &mut GlGraphics, transform: Matrix2d) {
+    fn render_entity(entity: &Entity, gl: &mut GlGraphics, transform: Matrix2d) {
         let square = graphics::rectangle::square(
-            position[0] as f64 * CELL_WIDTH,
-            position[1] as f64 * CELL_WIDTH,
+            entity.position[0] as f64 * CELL_WIDTH,
+            entity.position[1] as f64 * CELL_WIDTH,
             CELL_WIDTH,
         );
-        graphics::rectangle(color, square, transform, gl);
+        graphics::rectangle(entity.color, square, transform, gl);
     }
 
     fn update(&mut self, args: &UpdateArgs) {
@@ -197,35 +249,38 @@ impl Game {
                 new_head[1] += self.direction.as_tuple()[1];
                 self.snake_positions.push(new_head);
                 if self.has_collided() {
-                    self.trap_positions.clear();
+                    self.traps.clear();
                     self.playing = false;
                     println!("GAME OVER")
                 }
 
-                if self.snake_head() == self.food_position {
-                    self.food_position = Game::random_position();
+                if self.snake_head() == self.food.position {
+                    self.food.position = Game::random_position();
                 } else {
                     self.snake_positions.remove(0);
                 }
             }
-            if let Some(bullet_pos) = self.bullet_position {
-                self.bullet_move_timer -= args.dt;
-                if self.bullet_move_timer < 0.0 {
-                    self.bullet_move_timer += BULLET_MOVEMENT_COOLDOWN;
-                    let [dx, dy] = self.bullet_direction.as_tuple();
-                    self.bullet_position = Some([bullet_pos[0] + dx, bullet_pos[1] + dy]);
+            if let Some(mut bullet) = self.bullet.as_mut() {
+                let movement = bullet
+                    .movement
+                    .as_mut()
+                    .expect("Bullet must have movement!");
+                movement.timer -= args.dt;
+                if movement.timer < 0.0 {
+                    movement.timer += BULLET_MOVEMENT_COOLDOWN;
+                    let [dx, dy] = movement.direction.as_tuple();
+                    bullet.position = [bullet.position[0] + dx, bullet.position[1] + dy];
                 }
 
-                if bullet_pos == self.food_position {
-                    self.food_position = Game::random_position();
+                if bullet.position == self.food.position {
+                    self.food.position = Game::random_position();
                 }
-                self.trap_positions
-                    .retain(|trap_pos| *trap_pos != bullet_pos);
+                self.traps.retain(|trap| trap.position != bullet.position);
             }
             self.trap_spawn_timer -= args.dt;
             if self.trap_spawn_timer < 0.0 {
                 self.trap_spawn_timer += TRAP_SPAWN_COOLDOWN;
-                self.trap_positions.push(Game::random_position());
+                self.traps.push(Entity::new_trap(Game::random_position()));
             }
         }
     }
@@ -238,7 +293,7 @@ impl Game {
     }
 
     fn snake_head(&self) -> Position {
-        *self.snake_positions.last().unwrap()
+        *self.snake_positions.last().expect("Snake must have head!")
     }
 
     fn has_collided(&self) -> bool {
@@ -247,7 +302,7 @@ impl Game {
             head[0] < 0 || head[0] >= GRID_SIZE[0] || head[1] < 0 || head[1] >= GRID_SIZE[1];
         let self_collision =
             self.snake_positions[0..self.snake_positions.len() - 1].contains(&head);
-        let trap_collision = self.trap_positions.contains(&head);
+        let trap_collision = self.traps.iter().any(|trap| trap.position == head);
         outside_grid || self_collision || trap_collision
     }
 
@@ -266,9 +321,9 @@ impl Game {
                 Key::Right => self.handle_direction_key_press(Direction::Right),
                 Key::Space => {
                     let head = self.snake_head();
-                    self.bullet_direction = self.direction;
-                    let [dx, dy] = self.bullet_direction.as_tuple();
-                    self.bullet_position = Some([head[0] + dx, head[1] + dy]);
+                    let [dx, dy] = self.direction.as_tuple();
+                    let bullet_position = [head[0] + dx, head[1] + dy];
+                    self.bullet = Some(Entity::new_bullet(bullet_position, self.direction));
                 }
                 _ => {}
             }
@@ -295,7 +350,7 @@ fn main() {
         .graphics_api(opengl)
         .exit_on_esc(true)
         .build()
-        .unwrap();
+        .expect("Failed to set up window!");
 
     // Create a new game and run it.
     let mut game = Game::new(GlGraphics::new(opengl));
