@@ -126,6 +126,15 @@ impl Entity {
             }
         }
     }
+
+    fn render(&self, gl: &mut GlGraphics, transform: Matrix2d) {
+        let square = graphics::rectangle::square(
+            self.position[0] as f64 * CELL_WIDTH,
+            self.position[1] as f64 * CELL_WIDTH,
+            CELL_WIDTH,
+        );
+        graphics::rectangle(self.color, square, transform, gl);
+    }
 }
 
 impl Default for Entity {
@@ -183,10 +192,22 @@ impl Snake {
         }
     }
 
-    fn position_one_step_forward(& self) -> Position {
+    fn position_one_step_forward(&self) -> Position {
         let head = self.head();
         let [dx, dy] = self.direction.as_tuple();
         [head[0] + dx, head[1] + dy]
+    }
+
+    fn render(&self, alive: bool, gl: &mut GlGraphics, transform: Matrix2d) {
+        let color = if alive { COLOR_SNAKE } else { COLOR_DEAD_SNAKE };
+        for pos in &self.positions {
+            let square = graphics::rectangle::square(
+                pos[0] as f64 * CELL_WIDTH,
+                pos[1] as f64 * CELL_WIDTH,
+                CELL_WIDTH,
+            );
+            graphics::rectangle(color, square, transform, gl);
+        }
     }
 }
 
@@ -232,11 +253,11 @@ impl Game {
             graphics::clear(COLOR_BG, gl);
             let transform = c.transform.trans(PIXEL_OFFSET[0], PIXEL_OFFSET[1]);
             Game::render_grid(transform, gl);
-            Game::render_snake(&snake.positions, playing, gl, transform);
-            Game::render_entity(food, gl, transform);
-            bullet.map(|bullet| Game::render_entity(&bullet, gl, transform));
+            snake.render(playing, gl, transform);
+            food.render(gl, transform);
+            bullet.map(|bullet| bullet.render(gl, transform));
             for trap in traps {
-                Game::render_entity(trap, gl, transform);
+                trap.render(gl, transform);
             }
         });
     }
@@ -264,39 +285,10 @@ impl Game {
         }
     }
 
-    fn render_snake(
-        snake_positions: &Vec<Position>,
-        playing: bool,
-        gl: &mut GlGraphics,
-        transform: Matrix2d,
-    ) {
-        let color = if playing {
-            COLOR_SNAKE
-        } else {
-            COLOR_DEAD_SNAKE
-        };
-        for pos in snake_positions {
-            let square = graphics::rectangle::square(
-                pos[0] as f64 * CELL_WIDTH,
-                pos[1] as f64 * CELL_WIDTH,
-                CELL_WIDTH,
-            );
-            graphics::rectangle(color, square, transform, gl);
-        }
-    }
-
-    fn render_entity(entity: &Entity, gl: &mut GlGraphics, transform: Matrix2d) {
-        let square = graphics::rectangle::square(
-            entity.position[0] as f64 * CELL_WIDTH,
-            entity.position[1] as f64 * CELL_WIDTH,
-            CELL_WIDTH,
-        );
-        graphics::rectangle(entity.color, square, transform, gl);
-    }
-
     fn update(&mut self, args: &UpdateArgs) {
         if self.playing {
-            if self.snake.update(args.dt) {
+            let elapsed_seconds = args.dt;
+            if self.snake.update(elapsed_seconds) {
                 let head = self.snake.head();
                 if Game::is_outside_grid(&head)
                     || self.snake.self_collision()
@@ -305,21 +297,21 @@ impl Game {
                     self.on_game_over()
                 }
 
-                if self.snake.head() == self.food.position {
+                if head == self.food.position {
                     self.food.position = Game::random_position();
                 } else {
                     self.snake.positions.remove(0);
                 }
             }
             if let Some(bullet) = self.bullet.as_mut() {
-                bullet.update(args.dt);
+                bullet.update(elapsed_seconds);
 
                 if bullet.position == self.food.position {
                     self.food.position = Game::random_position();
                 }
                 self.traps.retain(|trap| trap.position != bullet.position);
             }
-            self.trap_spawn_timer -= args.dt;
+            self.trap_spawn_timer -= elapsed_seconds;
             if self.trap_spawn_timer < 0.0 {
                 self.trap_spawn_timer += TRAP_SPAWN_COOLDOWN;
                 self.traps.push(Entity::new_trap(Game::random_position()));
