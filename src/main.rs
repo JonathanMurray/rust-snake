@@ -16,10 +16,12 @@ use piston::ButtonEvent;
 use piston::ButtonState;
 use piston::Key;
 use rand::Rng;
+use std::fmt::Debug;
 
 const WINDOW_SIZE: [u32; 2] = [600, 600];
 const SNAKE_MOVEMENT_COOLDOWN: f64 = 0.1;
 const BULLET_MOVEMENT_COOLDOWN: f64 = 0.07;
+const ENEMY_MOVEMENT_COOLDOWN: f64 = 0.3;
 const TRAP_SPAWN_COOLDOWN: f64 = 5.0;
 
 const GRID_SIZE: [i32; 2] = [32, 32];
@@ -30,6 +32,7 @@ const COLOR_DEAD_SNAKE: Color = [1.0, 0.0, 0.0, 1.0];
 const COLOR_FOOD: Color = [0.3, 1.0, 0.3, 0.5];
 const COLOR_BULLET: Color = [0.8, 0.1, 0.1, 1.0];
 const COLOR_TRAP: Color = [0.8, 0.1, 0.8, 1.0];
+const COLOR_ENEMY: Color = [0.4, 0.2, 0.3, 0.8];
 const COLOR_GRID: Color = [0.3, 0.0, 0.7, 1.0];
 const PIXEL_OFFSET: [f64; 2] = [
     (WINDOW_SIZE[0] as f64 - GRID_SIZE[0] as f64 * CELL_WIDTH) / 2.0,
@@ -45,6 +48,16 @@ enum Direction {
     Left,
     Up,
     Down,
+}
+
+fn random_direction() -> Direction {
+    let mut rng = rand::thread_rng();
+    [
+        Direction::Right,
+        Direction::Left,
+        Direction::Up,
+        Direction::Down,
+    ][rng.gen_range(0, 4)]
 }
 
 impl Direction {
@@ -67,14 +80,18 @@ impl Direction {
     }
 }
 
+trait Movement: Debug {
+    fn apply(&mut self, elapsed_seconds: f64) -> Option<[i32; 2]>;
+}
+
 #[derive(Debug)]
-pub struct EntityMovement {
+pub struct RandomMovement {
     timer: f64,
     direction: Direction,
     cooldown: f64,
 }
 
-impl EntityMovement {
+impl RandomMovement {
     fn new(direction: Direction, cooldown: f64) -> Self {
         Self {
             timer: 0.0,
@@ -84,10 +101,52 @@ impl EntityMovement {
     }
 }
 
+impl Movement for RandomMovement {
+    fn apply(&mut self, elapsed_seconds: f64) -> Option<[i32; 2]> {
+        self.timer -= elapsed_seconds;
+        if self.timer < 0.0 {
+            self.timer += self.cooldown;
+            self.direction = random_direction();
+            Some(self.direction.as_tuple())
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct StaticMovement {
+    timer: f64,
+    direction: Direction,
+    cooldown: f64,
+}
+
+impl StaticMovement {
+    fn new(direction: Direction, cooldown: f64) -> Self {
+        Self {
+            timer: 0.0,
+            direction,
+            cooldown,
+        }
+    }
+}
+
+impl Movement for StaticMovement {
+    fn apply(&mut self, elapsed_seconds: f64) -> Option<[i32; 2]> {
+        self.timer -= elapsed_seconds;
+        if self.timer < 0.0 {
+            self.timer += self.cooldown;
+            Some(self.direction.as_tuple())
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Entity {
     position: Position,
-    movement: Option<EntityMovement>,
+    movement: Option<Box<dyn Movement>>,
     color: Color,
 }
 
@@ -103,7 +162,10 @@ impl Entity {
     fn new_bullet(position: Position, direction: Direction) -> Self {
         Self {
             position,
-            movement: Some(EntityMovement::new(direction, BULLET_MOVEMENT_COOLDOWN)),
+            movement: Some(Box::new(StaticMovement::new(
+                direction,
+                BULLET_MOVEMENT_COOLDOWN,
+            ))),
             color: COLOR_BULLET,
         }
     }
@@ -116,12 +178,20 @@ impl Entity {
         }
     }
 
+    fn new_enemy(position: Position, direction: Direction) -> Self {
+        Self {
+            position,
+            movement: Some(Box::new(RandomMovement::new(
+                direction,
+                ENEMY_MOVEMENT_COOLDOWN,
+            ))),
+            color: COLOR_ENEMY,
+        }
+    }
+
     fn update(&mut self, elapsed_seconds: f64) {
         if let Some(movement) = self.movement.as_mut() {
-            movement.timer -= elapsed_seconds;
-            if movement.timer < 0.0 {
-                movement.timer += movement.cooldown;
-                let [dx, dy] = movement.direction.as_tuple();
+            if let Some([dx, dy]) = movement.apply(elapsed_seconds) {
                 self.position = [self.position[0] + dx, self.position[1] + dy];
             }
         }
@@ -219,6 +289,7 @@ pub struct Game {
     bullet: Option<Entity>,
     traps: Vec<Entity>,
     trap_spawn_timer: f64,
+    enemy: Option<Entity>,
 }
 
 impl Game {
@@ -231,6 +302,7 @@ impl Game {
             bullet: None,
             traps: vec![],
             trap_spawn_timer: 0.0,
+            enemy: None,
         }
     }
 
@@ -240,6 +312,10 @@ impl Game {
         self.food = Entity::new_food(Game::random_position());
         self.bullet = None;
         self.traps = vec![];
+        self.enemy = Some(Entity::new_enemy(
+            [GRID_SIZE[0] / 2, GRID_SIZE[1] / 2],
+            Direction::Down,
+        ));
     }
 
     fn render(&mut self, args: &RenderArgs) {
@@ -248,6 +324,7 @@ impl Game {
         let food = &self.food;
         let bullet = &self.bullet.as_ref();
         let traps = &self.traps;
+        let enemy = &self.enemy.as_ref();
 
         self.gl.draw(args.viewport(), |c, gl| {
             graphics::clear(COLOR_BG, gl);
@@ -259,6 +336,7 @@ impl Game {
             for trap in traps {
                 trap.render(gl, transform);
             }
+            enemy.map(|enemy| enemy.render(gl, transform));
         });
     }
 
@@ -288,11 +366,19 @@ impl Game {
     fn update(&mut self, args: &UpdateArgs) {
         if self.playing {
             let elapsed_seconds = args.dt;
+            if let Some(enemy) = self.enemy.as_mut() {
+                enemy.update(elapsed_seconds);
+            }
             if self.snake.update(elapsed_seconds) {
                 let head = self.snake.head();
                 if Game::is_outside_grid(&head)
                     || self.snake.self_collision()
                     || self.traps.iter().any(|trap| trap.position == head)
+                    || self
+                        .enemy
+                        .as_ref()
+                        .map(|enemy| enemy.position == head)
+                        .unwrap_or(false)
                 {
                     self.on_game_over()
                 }
@@ -305,12 +391,12 @@ impl Game {
             }
             if let Some(bullet) = self.bullet.as_mut() {
                 bullet.update(elapsed_seconds);
-
                 if bullet.position == self.food.position {
                     self.food.position = Game::random_position();
                 }
                 self.traps.retain(|trap| trap.position != bullet.position);
             }
+
             self.trap_spawn_timer -= elapsed_seconds;
             if self.trap_spawn_timer < 0.0 {
                 self.trap_spawn_timer += TRAP_SPAWN_COOLDOWN;
