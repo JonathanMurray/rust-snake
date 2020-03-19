@@ -138,13 +138,62 @@ impl Default for Entity {
     }
 }
 
+pub struct Snake {
+    positions: Vec<Position>,
+    next_direction: Direction,
+    direction: Direction,
+    move_timer: f64,
+}
+
+impl Snake {
+    fn new(position: Position) -> Self {
+        Self {
+            positions: vec![position],
+            next_direction: Direction::Right,
+            direction: Direction::Right,
+            move_timer: 0.0,
+        }
+    }
+
+    fn head(&self) -> Position {
+        *self.positions.last().expect("Snake must have head!")
+    }
+
+    fn self_collision(&self) -> bool {
+        let head = self.head();
+        self.positions[0..self.positions.len() - 1].contains(&head)
+    }
+
+    fn try_set_direction(&mut self, direction: Direction) {
+        if self.direction.opposite() != direction {
+            self.next_direction = direction;
+        }
+    }
+
+    fn update(&mut self, elapsed_seconds: f64) -> bool {
+        self.move_timer -= elapsed_seconds;
+        if self.move_timer < 0.0 {
+            self.move_timer += SNAKE_MOVEMENT_COOLDOWN;
+            self.direction = self.next_direction;
+            let new_head = self.position_one_step_forward();
+            self.positions.push(new_head);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn position_one_step_forward(& self) -> Position {
+        let head = self.head();
+        let [dx, dy] = self.direction.as_tuple();
+        [head[0] + dx, head[1] + dy]
+    }
+}
+
 pub struct Game {
     gl: GlGraphics,
     playing: bool,
-    snake_positions: Vec<Position>,
-    next_direction: Direction,
-    direction: Direction,
-    snake_move_timer: f64,
+    snake: Snake,
     food: Entity,
     bullet: Option<Entity>,
     traps: Vec<Entity>,
@@ -156,10 +205,7 @@ impl Game {
         Game {
             gl,
             playing: true,
-            snake_positions: vec![],
-            next_direction: Direction::Right,
-            direction: Direction::Right,
-            snake_move_timer: 0.0,
+            snake: Snake::new([0, 0]),
             food: Default::default(),
             bullet: None,
             traps: vec![],
@@ -169,17 +215,14 @@ impl Game {
 
     fn set_start_state(&mut self) {
         self.playing = true;
-        self.snake_positions = vec![[0, GRID_SIZE[1] / 2]];
-        self.next_direction = Direction::Right;
-        self.direction = self.next_direction;
-        self.snake_move_timer = 0.0;
+        self.snake = Snake::new([0, GRID_SIZE[1] / 2]);
         self.food = Entity::new_food(Game::random_position());
         self.bullet = None;
         self.traps = vec![];
     }
 
     fn render(&mut self, args: &RenderArgs) {
-        let snake_positions = &self.snake_positions;
+        let snake = &self.snake;
         let playing = self.playing;
         let food = &self.food;
         let bullet = &self.bullet.as_ref();
@@ -189,7 +232,7 @@ impl Game {
             graphics::clear(COLOR_BG, gl);
             let transform = c.transform.trans(PIXEL_OFFSET[0], PIXEL_OFFSET[1]);
             Game::render_grid(transform, gl);
-            Game::render_snake(snake_positions, playing, gl, transform);
+            Game::render_snake(&snake.positions, playing, gl, transform);
             Game::render_entity(food, gl, transform);
             bullet.map(|bullet| Game::render_entity(&bullet, gl, transform));
             for trap in traps {
@@ -253,24 +296,19 @@ impl Game {
 
     fn update(&mut self, args: &UpdateArgs) {
         if self.playing {
-            self.snake_move_timer -= args.dt;
-            if self.snake_move_timer < 0.0 {
-                self.snake_move_timer += SNAKE_MOVEMENT_COOLDOWN;
-                let mut new_head = self.snake_head().clone();
-                self.direction = self.next_direction;
-                new_head[0] += self.direction.as_tuple()[0];
-                new_head[1] += self.direction.as_tuple()[1];
-                self.snake_positions.push(new_head);
-                if self.has_collided() {
-                    self.traps.clear();
-                    self.playing = false;
-                    println!("GAME OVER")
+            if self.snake.update(args.dt) {
+                let head = self.snake.head();
+                if Game::is_outside_grid(&head)
+                    || self.snake.self_collision()
+                    || self.traps.iter().any(|trap| trap.position == head)
+                {
+                    self.on_game_over()
                 }
 
-                if self.snake_head() == self.food.position {
+                if self.snake.head() == self.food.position {
                     self.food.position = Game::random_position();
                 } else {
-                    self.snake_positions.remove(0);
+                    self.snake.positions.remove(0);
                 }
             }
             if let Some(bullet) = self.bullet.as_mut() {
@@ -289,6 +327,12 @@ impl Game {
         }
     }
 
+    fn on_game_over(&mut self) -> () {
+        self.traps.clear();
+        self.playing = false;
+        println!("GAME OVER")
+    }
+
     fn random_position() -> [i32; 2] {
         let mut rng = rand::thread_rng();
         let x = rng.gen_range(0, GRID_SIZE[0]);
@@ -296,38 +340,23 @@ impl Game {
         [x, y]
     }
 
-    fn snake_head(&self) -> Position {
-        *self.snake_positions.last().expect("Snake must have head!")
-    }
-
-    fn has_collided(&self) -> bool {
-        let head = self.snake_head();
-        let outside_grid =
-            head[0] < 0 || head[0] >= GRID_SIZE[0] || head[1] < 0 || head[1] >= GRID_SIZE[1];
-        let self_collision =
-            self.snake_positions[0..self.snake_positions.len() - 1].contains(&head);
-        let trap_collision = self.traps.iter().any(|trap| trap.position == head);
-        outside_grid || self_collision || trap_collision
-    }
-
-    fn handle_direction_key_press(&mut self, pressed_direction: Direction) {
-        if self.direction.opposite() != pressed_direction {
-            self.next_direction = pressed_direction;
-        }
+    fn is_outside_grid(position: &Position) -> bool {
+        position[0] < 0
+            || position[0] >= GRID_SIZE[0]
+            || position[1] < 0
+            || position[1] >= GRID_SIZE[1]
     }
 
     fn handle_key_press(&mut self, key: Key) {
         if self.playing {
             match key {
-                Key::Up => self.handle_direction_key_press(Direction::Up),
-                Key::Down => self.handle_direction_key_press(Direction::Down),
-                Key::Left => self.handle_direction_key_press(Direction::Left),
-                Key::Right => self.handle_direction_key_press(Direction::Right),
+                Key::Up => self.snake.try_set_direction(Direction::Up),
+                Key::Down => self.snake.try_set_direction(Direction::Down),
+                Key::Left => self.snake.try_set_direction(Direction::Left),
+                Key::Right => self.snake.try_set_direction(Direction::Right),
                 Key::Space => {
-                    let head = self.snake_head();
-                    let [dx, dy] = self.direction.as_tuple();
-                    let bullet_position = [head[0] + dx, head[1] + dy];
-                    self.bullet = Some(Entity::new_bullet(bullet_position, self.direction));
+                    let bullet_position = self.snake.position_one_step_forward();
+                    self.bullet = Some(Entity::new_bullet(bullet_position, self.snake.direction));
                 }
                 _ => {}
             }
