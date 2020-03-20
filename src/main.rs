@@ -23,7 +23,7 @@ const SNAKE_MOVEMENT_COOLDOWN: f64 = 0.1;
 const BULLET_MOVEMENT_COOLDOWN: f64 = 0.07;
 const ENEMY_MOVEMENT_COOLDOWN: f64 = 0.3;
 const TRAP_SPAWN_COOLDOWN: f64 = 5.0;
-
+const MAX_AMMO: u32 = 5;
 const GRID_SIZE: [i32; 2] = [32, 32];
 const CELL_WIDTH: f64 = 16.0;
 const COLOR_BG: Color = [0.1, 0.1, 0.1, 1.0];
@@ -222,6 +222,7 @@ pub struct Snake {
     next_direction: Direction,
     direction: Direction,
     move_timer: f64,
+    ammo: u32,
 }
 
 impl Snake {
@@ -231,6 +232,7 @@ impl Snake {
             next_direction: Direction::Right,
             direction: Direction::Right,
             move_timer: 0.0,
+            ammo: 0,
         }
     }
 
@@ -279,6 +281,21 @@ impl Snake {
             graphics::rectangle(color, square, transform, gl);
         }
     }
+
+    fn try_shoot(&mut self) -> Option<(Position, Direction)> {
+        if self.ammo > 0 {
+            self.ammo -= 1;
+            Some((self.position_one_step_forward(), self.direction))
+        } else {
+            None
+        }
+    }
+
+    fn gain_ammo(&mut self) {
+        if self.ammo < MAX_AMMO {
+            self.ammo += 1;
+        }
+    }
 }
 
 pub struct Game {
@@ -325,6 +342,7 @@ impl Game {
         let bullet = &self.bullet.as_ref();
         let traps = &self.traps;
         let enemy = &self.enemy.as_ref();
+        let ammo = self.snake.ammo;
 
         self.gl.draw(args.viewport(), |c, gl| {
             graphics::clear(COLOR_BG, gl);
@@ -337,7 +355,30 @@ impl Game {
                 trap.render(gl, transform);
             }
             enemy.map(|enemy| enemy.render(gl, transform));
+            Game::render_ammo_ui(ammo, gl, transform)
         });
+    }
+
+    fn render_ammo_ui(ammo: u32, gl: &mut GlGraphics, transform: Matrix2d) -> () {
+        let margin = 4.0;
+        let padding = 1.0;
+        let width = 16.0;
+        for i in 0..MAX_AMMO {
+            let square = graphics::rectangle::square(
+                -PIXEL_OFFSET[0] + margin + i as f64 * (width + 2.0),
+                -PIXEL_OFFSET[1] + margin,
+                width,
+            );
+            graphics::rectangle([0.5, 0.5, 0.5, 1.0], square, transform, gl);
+            if ammo > i {
+                let square = graphics::rectangle::square(
+                    -PIXEL_OFFSET[0] + margin + i as f64 * (width + 2.0) + padding,
+                    -PIXEL_OFFSET[1] + margin + padding,
+                    width - padding * 2.0,
+                );
+                graphics::rectangle([0.0, 0.0, 0.0, 1.0], square, transform, gl);
+            }
+        }
     }
 
     fn render_grid(transform: Matrix2d, gl: &mut GlGraphics) -> () {
@@ -385,6 +426,7 @@ impl Game {
 
                 if head == self.food.position {
                     self.food.position = Game::random_position();
+                    self.snake.gain_ammo();
                 } else {
                     self.snake.positions.remove(0);
                 }
@@ -433,8 +475,11 @@ impl Game {
                 Key::Left => self.snake.try_set_direction(Direction::Left),
                 Key::Right => self.snake.try_set_direction(Direction::Right),
                 Key::Space => {
-                    let bullet_position = self.snake.position_one_step_forward();
-                    self.bullet = Some(Entity::new_bullet(bullet_position, self.snake.direction));
+                    if let Some((bullet_position, bullet_direction)) = self.snake.try_shoot() {
+                        self.bullet = Some(Entity::new_bullet(bullet_position, bullet_direction));
+                    } else {
+                        println!("NO AMMO");
+                    }
                 }
                 _ => {}
             }
