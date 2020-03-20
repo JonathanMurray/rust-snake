@@ -22,7 +22,6 @@ const WINDOW_SIZE: [u32; 2] = [600, 600];
 const SNAKE_MOVEMENT_COOLDOWN: f64 = 0.1;
 const BULLET_MOVEMENT_COOLDOWN: f64 = 0.07;
 const ENEMY_MOVEMENT_COOLDOWN: f64 = 0.3;
-const TRAP_SPAWN_COOLDOWN: f64 = 5.0;
 const MAX_AMMO: u32 = 5;
 const GRID_SIZE: [i32; 2] = [32, 32];
 const CELL_WIDTH: f64 = 16.0;
@@ -48,6 +47,12 @@ enum Direction {
     Left,
     Up,
     Down,
+}
+
+impl Default for Direction {
+    fn default() -> Self {
+        Direction::Right
+    }
 }
 
 fn random_direction() -> Direction {
@@ -217,6 +222,7 @@ impl Default for Entity {
     }
 }
 
+#[derive(Default)]
 pub struct Snake {
     positions: Vec<Position>,
     next_direction: Direction,
@@ -291,9 +297,25 @@ impl Snake {
         }
     }
 
-    fn gain_ammo(&mut self) {
-        if self.ammo < MAX_AMMO {
-            self.ammo += 1;
+    fn gain_ammo(&mut self, amount: u32) {
+        self.ammo = std::cmp::min(self.ammo + amount, MAX_AMMO);
+    }
+}
+
+#[derive(Default)]
+struct TrapSpawner {
+    timer: f64,
+    cooldown: f64,
+}
+
+impl TrapSpawner {
+    fn update(&mut self, elapsed_seconds: f64) -> Option<Position> {
+        self.timer -= elapsed_seconds;
+        if self.timer < 0.0 {
+            self.timer += self.cooldown;
+            Some(Game::random_position())
+        } else {
+            None
         }
     }
 }
@@ -305,8 +327,9 @@ pub struct Game {
     food: Entity,
     bullet: Option<Entity>,
     traps: Vec<Entity>,
-    trap_spawn_timer: f64,
+    trap_spawner: TrapSpawner,
     enemy: Option<Entity>,
+    total_elapsed_seconds: f64,
 }
 
 impl Game {
@@ -314,12 +337,13 @@ impl Game {
         Game {
             gl,
             playing: true,
-            snake: Snake::new([0, 0]),
+            snake: Default::default(),
             food: Default::default(),
             bullet: None,
             traps: vec![],
-            trap_spawn_timer: 0.0,
+            trap_spawner: TrapSpawner::default(),
             enemy: None,
+            total_elapsed_seconds: 0.0,
         }
     }
 
@@ -333,6 +357,11 @@ impl Game {
             [GRID_SIZE[0] / 2, GRID_SIZE[1] / 2],
             Direction::Down,
         ));
+        self.trap_spawner = TrapSpawner {
+            timer: 0.0,
+            cooldown: 5.0,
+        };
+        self.total_elapsed_seconds = 0.0;
     }
 
     fn render(&mut self, args: &RenderArgs) {
@@ -407,6 +436,19 @@ impl Game {
     fn update(&mut self, args: &UpdateArgs) {
         if self.playing {
             let elapsed_seconds = args.dt;
+            let timestamp_1 = 30.0;
+            let timestamp_2 = 60.0;
+            if self.total_elapsed_seconds < timestamp_1
+                && self.total_elapsed_seconds + elapsed_seconds >= timestamp_1
+            {
+                self.trap_spawner.cooldown = 2.0;
+            }
+            if self.total_elapsed_seconds < timestamp_2
+                && self.total_elapsed_seconds + elapsed_seconds >= timestamp_2
+            {
+                self.trap_spawner.cooldown = 0.5;
+            }
+            self.total_elapsed_seconds += elapsed_seconds;
             if let Some(enemy) = self.enemy.as_mut() {
                 enemy.update(elapsed_seconds);
             }
@@ -426,7 +468,7 @@ impl Game {
 
                 if head == self.food.position {
                     self.food.position = Game::random_position();
-                    self.snake.gain_ammo();
+                    self.snake.gain_ammo(3);
                 } else {
                     self.snake.positions.remove(0);
                 }
@@ -439,10 +481,8 @@ impl Game {
                 self.traps.retain(|trap| trap.position != bullet.position);
             }
 
-            self.trap_spawn_timer -= elapsed_seconds;
-            if self.trap_spawn_timer < 0.0 {
-                self.trap_spawn_timer += TRAP_SPAWN_COOLDOWN;
-                self.traps.push(Entity::new_trap(Game::random_position()));
+            if let Some(trap_position) = self.trap_spawner.update(elapsed_seconds) {
+                self.traps.push(Entity::new_trap(trap_position));
             }
         }
     }
