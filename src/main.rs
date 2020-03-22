@@ -4,6 +4,11 @@ extern crate opengl_graphics;
 extern crate piston;
 extern crate rand;
 
+pub mod common;
+pub mod entities;
+
+use common::{Color, Direction, Position, CELL_WIDTH};
+use entities::{Entity, Snake};
 use glutin_window::GlutinWindow as Window;
 use graphics::types::Matrix2d;
 use graphics::Transformed;
@@ -16,291 +21,16 @@ use piston::ButtonEvent;
 use piston::ButtonState;
 use piston::Key;
 use rand::Rng;
-use std::fmt::Debug;
 
 const WINDOW_SIZE: [u32; 2] = [600, 600];
-const SNAKE_MOVEMENT_COOLDOWN: f64 = 0.1;
-const BULLET_MOVEMENT_COOLDOWN: f64 = 0.07;
-const ENEMY_MOVEMENT_COOLDOWN: f64 = 0.3;
 const MAX_AMMO: u32 = 5;
 const GRID_SIZE: [i32; 2] = [32, 32];
-const CELL_WIDTH: f64 = 16.0;
 const COLOR_BG: Color = [0.1, 0.1, 0.1, 1.0];
-const COLOR_SNAKE: Color = [1.0, 1.0, 0.0, 1.0];
-const COLOR_DEAD_SNAKE: Color = [1.0, 0.0, 0.0, 1.0];
-const COLOR_FOOD: Color = [0.3, 1.0, 0.3, 0.5];
-const COLOR_BULLET: Color = [0.8, 0.1, 0.1, 1.0];
-const COLOR_TRAP: Color = [0.8, 0.1, 0.8, 1.0];
-const COLOR_ENEMY: Color = [0.4, 0.2, 0.3, 0.8];
 const COLOR_GRID: Color = [0.3, 0.0, 0.7, 1.0];
 const PIXEL_OFFSET: [f64; 2] = [
     (WINDOW_SIZE[0] as f64 - GRID_SIZE[0] as f64 * CELL_WIDTH) / 2.0,
     (WINDOW_SIZE[1] as f64 - GRID_SIZE[1] as f64 * CELL_WIDTH) / 2.0,
 ];
-
-type Color = [f32; 4];
-type Position = [i32; 2];
-
-#[derive(PartialEq, Copy, Clone, Debug)]
-enum Direction {
-    Right,
-    Left,
-    Up,
-    Down,
-}
-
-impl Default for Direction {
-    fn default() -> Self {
-        Direction::Right
-    }
-}
-
-fn random_direction() -> Direction {
-    let mut rng = rand::thread_rng();
-    [
-        Direction::Right,
-        Direction::Left,
-        Direction::Up,
-        Direction::Down,
-    ][rng.gen_range(0, 4)]
-}
-
-impl Direction {
-    fn as_tuple(&self) -> [i32; 2] {
-        match self {
-            Direction::Right => [1, 0],
-            Direction::Left => [-1, 0],
-            Direction::Up => [0, -1],
-            Direction::Down => [0, 1],
-        }
-    }
-
-    fn opposite(&self) -> Direction {
-        match self {
-            Direction::Right => Direction::Left,
-            Direction::Left => Direction::Right,
-            Direction::Up => Direction::Down,
-            Direction::Down => Direction::Up,
-        }
-    }
-}
-
-trait Movement: Debug {
-    fn apply(&mut self, elapsed_seconds: f64) -> Option<[i32; 2]>;
-}
-
-#[derive(Debug)]
-pub struct RandomMovement {
-    timer: f64,
-    direction: Direction,
-    cooldown: f64,
-}
-
-impl RandomMovement {
-    fn new(direction: Direction, cooldown: f64) -> Self {
-        Self {
-            timer: 0.0,
-            direction,
-            cooldown,
-        }
-    }
-}
-
-impl Movement for RandomMovement {
-    fn apply(&mut self, elapsed_seconds: f64) -> Option<[i32; 2]> {
-        self.timer -= elapsed_seconds;
-        if self.timer < 0.0 {
-            self.timer += self.cooldown;
-            self.direction = random_direction();
-            Some(self.direction.as_tuple())
-        } else {
-            None
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct StaticMovement {
-    timer: f64,
-    direction: Direction,
-    cooldown: f64,
-}
-
-impl StaticMovement {
-    fn new(direction: Direction, cooldown: f64) -> Self {
-        Self {
-            timer: 0.0,
-            direction,
-            cooldown,
-        }
-    }
-}
-
-impl Movement for StaticMovement {
-    fn apply(&mut self, elapsed_seconds: f64) -> Option<[i32; 2]> {
-        self.timer -= elapsed_seconds;
-        if self.timer < 0.0 {
-            self.timer += self.cooldown;
-            Some(self.direction.as_tuple())
-        } else {
-            None
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Entity {
-    position: Position,
-    movement: Option<Box<dyn Movement>>,
-    color: Color,
-}
-
-impl Entity {
-    fn new_food(position: Position) -> Self {
-        Self {
-            position,
-            movement: None,
-            color: COLOR_FOOD,
-        }
-    }
-
-    fn new_bullet(position: Position, direction: Direction) -> Self {
-        Self {
-            position,
-            movement: Some(Box::new(StaticMovement::new(
-                direction,
-                BULLET_MOVEMENT_COOLDOWN,
-            ))),
-            color: COLOR_BULLET,
-        }
-    }
-
-    fn new_trap(position: Position) -> Self {
-        Self {
-            position,
-            movement: None,
-            color: COLOR_TRAP,
-        }
-    }
-
-    fn new_enemy(position: Position, direction: Direction) -> Self {
-        Self {
-            position,
-            movement: Some(Box::new(RandomMovement::new(
-                direction,
-                ENEMY_MOVEMENT_COOLDOWN,
-            ))),
-            color: COLOR_ENEMY,
-        }
-    }
-
-    fn update(&mut self, elapsed_seconds: f64) {
-        if let Some(movement) = self.movement.as_mut() {
-            if let Some([dx, dy]) = movement.apply(elapsed_seconds) {
-                self.position = [self.position[0] + dx, self.position[1] + dy];
-            }
-        }
-    }
-
-    fn render(&self, gl: &mut GlGraphics, transform: Matrix2d) {
-        let square = graphics::rectangle::square(
-            self.position[0] as f64 * CELL_WIDTH,
-            self.position[1] as f64 * CELL_WIDTH,
-            CELL_WIDTH,
-        );
-        graphics::rectangle(self.color, square, transform, gl);
-    }
-}
-
-impl Default for Entity {
-    fn default() -> Self {
-        Self {
-            position: [0, 0],
-            movement: None,
-            color: [0.0, 0.0, 0.0, 1.0],
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct Snake {
-    positions: Vec<Position>,
-    next_direction: Direction,
-    direction: Direction,
-    move_timer: f64,
-    ammo: u32,
-}
-
-impl Snake {
-    fn new(position: Position) -> Self {
-        Self {
-            positions: vec![position],
-            next_direction: Direction::Right,
-            direction: Direction::Right,
-            move_timer: 0.0,
-            ammo: 0,
-        }
-    }
-
-    fn head(&self) -> Position {
-        *self.positions.last().expect("Snake must have head!")
-    }
-
-    fn self_collision(&self) -> bool {
-        let head = self.head();
-        self.positions[0..self.positions.len() - 1].contains(&head)
-    }
-
-    fn try_set_direction(&mut self, direction: Direction) {
-        if self.direction.opposite() != direction {
-            self.next_direction = direction;
-        }
-    }
-
-    fn update(&mut self, elapsed_seconds: f64) -> bool {
-        self.move_timer -= elapsed_seconds;
-        if self.move_timer < 0.0 {
-            self.move_timer += SNAKE_MOVEMENT_COOLDOWN;
-            self.direction = self.next_direction;
-            let new_head = self.position_one_step_forward();
-            self.positions.push(new_head);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn position_one_step_forward(&self) -> Position {
-        let head = self.head();
-        let [dx, dy] = self.direction.as_tuple();
-        [head[0] + dx, head[1] + dy]
-    }
-
-    fn render(&self, alive: bool, gl: &mut GlGraphics, transform: Matrix2d) {
-        let color = if alive { COLOR_SNAKE } else { COLOR_DEAD_SNAKE };
-        for pos in &self.positions {
-            let square = graphics::rectangle::square(
-                pos[0] as f64 * CELL_WIDTH,
-                pos[1] as f64 * CELL_WIDTH,
-                CELL_WIDTH,
-            );
-            graphics::rectangle(color, square, transform, gl);
-        }
-    }
-
-    fn try_shoot(&mut self) -> Option<(Position, Direction)> {
-        if self.ammo > 0 {
-            self.ammo -= 1;
-            Some((self.position_one_step_forward(), self.direction))
-        } else {
-            None
-        }
-    }
-
-    fn gain_ammo(&mut self, amount: u32) {
-        self.ammo = std::cmp::min(self.ammo + amount, MAX_AMMO);
-    }
-}
 
 #[derive(Default)]
 struct TrapSpawner {
@@ -349,7 +79,7 @@ impl Game {
 
     fn set_start_state(&mut self) {
         self.playing = true;
-        self.snake = Snake::new([0, GRID_SIZE[1] / 2]);
+        self.snake = Snake::new([0, GRID_SIZE[1] / 2], MAX_AMMO);
         self.food = Entity::new_food(Game::random_position());
         self.bullet = None;
         self.traps = vec![];
